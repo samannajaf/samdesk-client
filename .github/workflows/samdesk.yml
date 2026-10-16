@@ -237,12 +237,17 @@ jobs:
           doNotCache: false
 
       - name: Install vcpkg dependencies (arm64-v8a)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        shell: bash
         run: |
-          if ! ./flutter/build_android_deps.sh arm64-v8a; then
-            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do echo "== $f"; tail -n 80 "$f"; done
+          if ! ./flutter/build_android_deps.sh arm64-v8a 2>&1 | tee vcpkgdeps.log; then
+            tail=$( { find "${VCPKG_ROOT}/" -name "*.log" -exec tail -n 60 {} \; 2>/dev/null; tail -n 60 vcpkgdeps.log; } | tail -c 3000)
+            enc=$(printf '%s' "$tail" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::${enc}"
             exit 1
           fi
-        shell: bash
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

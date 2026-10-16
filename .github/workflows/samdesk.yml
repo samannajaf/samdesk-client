@@ -242,7 +242,8 @@ jobs:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         shell: bash
         run: |
-          if ! ./flutter/build_android_deps.sh arm64-v8a 2>&1 | tee vcpkgdeps.log; then
+          chmod +x ./flutter/*.sh || true
+          if ! bash ./flutter/build_android_deps.sh arm64-v8a 2>&1 | tee vcpkgdeps.log; then
             tail=$( { find "${VCPKG_ROOT}/" -name "*.log" -exec tail -n 60 {} \; 2>/dev/null; tail -n 60 vcpkgdeps.log; } | tail -c 3000)
             enc=$(printf '%s' "$tail" | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error::${enc}"

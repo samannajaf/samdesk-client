@@ -39,9 +39,17 @@ pub fn initialize() {
         let mut o = config::OVERWRITE_SETTINGS.write().unwrap();
         if is_customer() {
             o.insert("approve-mode".to_owned(), "click".to_owned());
-            o.insert("direct-server".to_owned(), "N".to_owned());
-            o.insert("enable-lan-discovery".to_owned(), "N".to_owned());
+            // Allow direct LAN connections: a supporter on the same local
+            // network can reach the customer by its internal IP without the
+            // server/relay. Incoming connections still require a valid signed
+            // ticket (verified locally against the built-in key) and the
+            // customer's click approval, so this does not weaken access control.
+            o.insert("direct-server".to_owned(), "Y".to_owned());
+            o.insert("enable-lan-discovery".to_owned(), "Y".to_owned());
             o.insert("allow-remote-config-modification".to_owned(), "N".to_owned());
+        } else if is_supporter() {
+            // Let a supporter discover and connect to customers on the same LAN.
+            o.insert("enable-lan-discovery".to_owned(), "Y".to_owned());
         }
     }
     {

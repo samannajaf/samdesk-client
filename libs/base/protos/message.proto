@@ -84,6 +84,7 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  string samdesk_ticket = 100;
 }
 
 message Terminal {

@@ -2802,6 +2802,23 @@ impl Connection {
         }
     }
 
+    #[cfg(feature = "samdesk")]
+    async fn samdesk_check_login(&mut self, lr: &LoginRequest) -> Option<bool> {
+        match crate::samdesk::check_login(&lr.samdesk_ticket, &lr.my_id) {
+            Ok(()) => None,
+            Err(crate::samdesk::Denied::NeedTicket) => {
+                self.send_login_error(crate::client::LOGIN_MSG_PASSWORD_EMPTY)
+                    .await;
+                Some(true)
+            }
+            Err(crate::samdesk::Denied::Refused(msg)) => {
+                self.send_login_error(msg).await;
+                sleep(1.).await;
+                Some(false)
+            }
+        }
+    }
+
     async fn handle_login_request_without_validation(&mut self, lr: &LoginRequest) {
         self.lr = lr.clone();
         self.peer_argb = crate::str2color(&format!("{}{}", &lr.my_id, &lr.my_platform), 0xff);
@@ -2874,6 +2891,10 @@ impl Connection {
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
             if !self.check_login_scope(&lr).await {
                 return false;
+            }
+            #[cfg(feature = "samdesk")]
+            if let Some(keep_alive) = self.samdesk_check_login(&lr).await {
+                return keep_alive;
             }
             self.awaiting_2fa = false;
             self.handle_login_request_without_validation(&lr).await;

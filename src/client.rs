@@ -4823,6 +4823,18 @@ pub async fn handle_login_from_ui(
     remember: bool,
     peer: &mut Stream,
 ) {
+    #[cfg(feature = "samdesk")]
+    if crate::samdesk::ticket::looks_like_ticket(&password) {
+        let mut msg_out = lc
+            .read()
+            .unwrap()
+            .create_login_msg(os_username, os_password, vec![]);
+        if let Some(message::Union::LoginRequest(lr)) = msg_out.union.as_mut() {
+            lr.samdesk_ticket = password.trim().to_owned();
+        }
+        allow_err!(peer.send(&msg_out).await);
+        return;
+    }
     let mut hash_password = if password.is_empty() {
         let mut password2 = lc.read().unwrap().password.clone();
         if password2.is_empty() {

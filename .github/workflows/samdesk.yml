@@ -1,0 +1,140 @@
+name: SamDesk Windows build
+
+# Builds the SamDesk customer (incoming only) and support (outgoing only) clients,
+# 32-bit and 64-bit, with the Sciter UI and the Rust toolchain upstream uses for
+# its Windows 7 compatible Sciter build.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+
+env:
+  LLVM_VERSION: "15.0.6"
+  SCITER_TOOLCHAIN: "nightly-2023-10-13"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+
+jobs:
+  ticket-tests:
+    name: Ticket verification unit tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Test src/samdesk/ticket.rs in isolation
+        shell: bash
+        run: |
+          mkdir -p /tmp/tt/shim/src /tmp/tt/t/src
+          printf '[package]\nname = "hbb_common"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nbase64 = "0.22"\nsodiumoxide = "0.2"\nserde_json = "1"\n' > /tmp/tt/shim/Cargo.toml
+          echo 'pub use base64; pub use sodiumoxide; pub use serde_json;' > /tmp/tt/shim/src/lib.rs
+          printf '[package]\nname = "t"\nversion = "0.1.0"\nedition = "2021"\n[dependencies]\nhbb_common = { path = "../shim" }\n' > /tmp/tt/t/Cargo.toml
+          echo "#[path = \"$GITHUB_WORKSPACE/src/samdesk/ticket.rs\"] pub mod ticket;" > /tmp/tt/t/src/lib.rs
+          cd /tmp/tt/t && cargo test
+
+  build:
+    name: ${{ matrix.role }} ${{ matrix.arch }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86, x64]
+        role: [customer, support]
+        include:
+          - arch: x86
+            target: i686-pc-windows-msvc
+            triplet: x86-windows-static
+            sciter_dir: x32
+            suffix: "-x86"
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            triplet: x64-windows-static
+            sciter_dir: x64
+            suffix: ""
+          - role: customer
+            out_name: SamDesk.Customer
+          - role: support
+            out_name: SamDesk.Support
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install LLVM and Clang (32-bit)
+        if: matrix.arch == 'x86'
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install LLVM and Clang (64-bit)
+        if: matrix.arch == 'x64'
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install ${{ env.SCITER_TOOLCHAIN }}-${{ matrix.target }} \
+            --target ${{ matrix.target }} --component rustfmt \
+            --profile minimal --no-self-update --force-non-host
+          rustup default ${{ env.SCITER_TOOLCHAIN }}-${{ matrix.target }} --force-non-host
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: samdesk-sciter-${{ matrix.arch }}-${{ matrix.role }}
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.triplet }}
+        shell: bash
+        run: |
+          if ! $VCPKG_ROOT/vcpkg install --triplet ${{ matrix.triplet }} --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do echo "== $f"; tail -n 50 "$f"; done
+            exit 1
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          python3 res/inline-sciter.py
+          if [ "${{ matrix.arch }}" = "x86" ]; then
+            sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
+            cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
+          fi
+          cargo build --locked --release --bins --features inline,vram,hwcodec,samdesk_${{ matrix.role }}
+          mkdir -p ./Release
+          mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
+          curl -fLJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/${{ matrix.sciter_dir }}/sciter.dll
+
+      - name: Build self-extracting executable
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe
+          popd
+          mkdir -p ./Output
+          mv ./target/release/rustdesk-portable-packer.exe "./Output/${{ matrix.out_name }}${{ matrix.suffix }}.exe"
+          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-${{ matrix.role }}-${{ matrix.arch }}.txt
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.out_name }}${{ matrix.suffix }}
+          path: Output

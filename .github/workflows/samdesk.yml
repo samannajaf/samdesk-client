@@ -116,7 +116,13 @@ jobs:
             sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
             cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
           fi
-          cargo build --locked --release --bins --features inline,vram,hwcodec,samdesk_${{ matrix.role }}
+          set -o pipefail
+          if ! cargo build --locked --release --bins --features inline,vram,hwcodec,samdesk_${{ matrix.role }} 2>&1 | tee build.log; then
+            block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
+            enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::${enc}"
+            exit 1
+          fi
           mkdir -p ./Release
           mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
           curl -fLJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/${{ matrix.sciter_dir }}/sciter.dll

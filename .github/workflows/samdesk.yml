@@ -6,6 +6,12 @@ name: SamDesk Windows build
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "What to build"
+        type: choice
+        default: all
+        options: [all, windows, android]
   push:
     branches: [master, main]
 
@@ -14,6 +20,12 @@ env:
   SCITER_TOOLCHAIN: "nightly-2023-10-13"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  # Android (support-only client) — mirrors upstream build-rustdesk-android
+  NDK_VERSION: "r28c"
+  CARGO_NDK_VERSION: "3.1.2"
+  ANDROID_FLUTTER_VERSION: "3.24.5"
+  ANDROID_RUST_VERSION: "1.75"
+  VERSION: "1.5.1"
 
 jobs:
   ticket-tests:
@@ -32,6 +44,9 @@ jobs:
           cd /tmp/tt/t && cargo test
 
   build:
+    # Windows exes are already built; only rebuild on an explicit dispatch so
+    # ordinary pushes (e.g. Android iteration) don't burn Windows CI minutes.
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'windows') }}
     name: ${{ matrix.role }} ${{ matrix.arch }}
     runs-on: windows-2022
     strategy:
@@ -147,4 +162,166 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.out_name }}${{ matrix.suffix }}
+          path: Output
+
+  # flutter_rust_bridge codegen, shared with upstream; produces bridge-artifact.
+  samdesk-bridge:
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'android')) }}
+    uses: ./.github/workflows/bridge.yml
+
+  # SamDesk support client for Android (outgoing only, enforced by the samdesk
+  # conn-type lock in src/samdesk). arm64-v8a only for now — the ABI that covers
+  # the large majority of phones; armv7/x86_64 can be added once this is green.
+  android-support:
+    needs: [samdesk-bridge]
+    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'android')) }}
+    name: android support arm64
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+               clang cmake curl gcc-multilib git g++ g++-multilib \
+               libayatana-appindicator3-dev libasound2-dev libc6-dev libclang-dev \
+               libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+               libgtk-3-dev libpulse-dev libva-dev libxcb-randr0-dev libxcb-shape0-dev \
+               libxcb-xfixes0-dev libxdo-dev libxfixes-dev llvm-dev nasm ninja-build \
+               openjdk-17-jdk-headless pkg-config tree wget
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.ANDROID_FLUTTER_VERSION }}
+
+      - name: Patch flutter
+        run: |
+          cd $(dirname $(dirname $(which flutter)))
+          git apply ${{ github.workspace }}/.github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - uses: nttld/setup-ndk@ed92fe6cadad69be94a966a7ee3271275e62f779 # v1
+        id: setup-ndk
+        with:
+          ndk-version: ${{ env.NDK_VERSION }}
+          add-to-path: true
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: /opt/artifacts/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies (arm64-v8a)
+        run: |
+          if ! ./flutter/build_android_deps.sh arm64-v8a; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do echo "== $f"; tail -n 80 "$f"; done
+            exit 1
+          fi
+        shell: bash
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.ANDROID_RUST_VERSION }}
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: samdesk-android-arm64
+
+      - name: Build rustdesk lib (samdesk_support)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
+          set -o pipefail
+          if ! cargo ndk --platform 21 --target aarch64-linux-android build --locked --release \
+               --features flutter,hwcodec,samdesk_support 2>&1 | tee build.log; then
+            block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
+            enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::${enc}"
+            exit 1
+          fi
+          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+
+      - name: Prepare signing
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KS_STOREPASS: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KS_KEYPASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$GITHUB_WORKSPACE/samdesk-release.jks"
+            {
+              echo "storePassword=$KS_STOREPASS"
+              echo "keyPassword=$KS_KEYPASS"
+              echo "keyAlias=$KS_ALIAS"
+              echo "storeFile=$GITHUB_WORKSPACE/samdesk-release.jks"
+            } > flutter/android/key.properties
+            echo "SAMDESK_SIGNING=release" >> "$GITHUB_ENV"
+          else
+            sed -i "s/signingConfigs.release/signingConfigs.debug/g" ./flutter/android/app/build.gradle
+            echo "SAMDESK_SIGNING=debug" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APK
+        shell: bash
+        env:
+          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
+          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
+          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
+          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          pushd flutter
+          flutter build apk --release --target-platform android-arm64 --split-per-abi
+          popd
+          mkdir -p ./Output
+          cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "./Output/SamDesk.Support-android-arm64.apk"
+          ( cd ./Output && sha256sum *.apk | tee SHA256SUMS-android-arm64.txt )
+          echo "APK signed with: $SAMDESK_SIGNING"
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: SamDesk.Support-android-arm64
           path: Output

@@ -126,6 +126,7 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          python3 res/samdesk_brand.py
           python3 res/inline-sciter.py
           if [ "${{ matrix.arch }}" = "x86" ]; then
             sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
@@ -272,6 +273,7 @@ jobs:
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         shell: bash
         run: |
+          python3 res/samdesk_brand.py
           rustup target add aarch64-linux-android
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
           set -o pipefail

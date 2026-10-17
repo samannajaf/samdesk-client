@@ -1,0 +1,46 @@
+name: SamDesk publish dist
+
+# Re-publishes already-built support binaries from a given run into the `dist`
+# branch, so they can be fetched by a plain git clone (no artifact/blob access).
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Source run id that holds the SamDesk.Support artifacts
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download support artifacts from the source run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          mkdir -p /tmp/art
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support     -D /tmp/art/x64
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86 -D /tmp/art/x86
+          find /tmp/art -type f -printf '%s\t%p\n'
+      - name: Push binaries into the dist branch
+        run: |
+          set -eux
+          mkdir -p /tmp/apps
+          find /tmp/art/x64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
+          find /tmp/art/x86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \;
+          ls -la /tmp/apps
+          git config user.name  "samdesk-ci"
+          git config user.email "ci@samdesk.local"
+          git checkout --orphan dist
+          git rm -rf . >/dev/null 2>&1 || true
+          rm -rf apps && mkdir -p apps
+          cp /tmp/apps/*.exe apps/
+          printf 'support binaries republished from run %s\n' "${{ inputs.run_id }}" > apps/README.txt
+          git add -f apps
+          git commit -m "dist: support exes from run ${{ inputs.run_id }}"
+          git push -f origin dist

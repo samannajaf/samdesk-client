@@ -18,21 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download support artifacts from the source run
+      - name: Download built artifacts from the source run
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eux
           mkdir -p /tmp/art
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support     -D /tmp/art/x64
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86 -D /tmp/art/x86
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support      -D /tmp/art/sup64
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86  -D /tmp/art/sup86
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer     -D /tmp/art/cus64
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer-x86 -D /tmp/art/cus86
           find /tmp/art -type f -printf '%s\t%p\n'
       - name: Push binaries into the dist branch
         run: |
           set -eux
           mkdir -p /tmp/apps
-          find /tmp/art/x64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
-          find /tmp/art/x86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \;
+          find /tmp/art/sup64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
+          find /tmp/art/sup86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \;
+          find /tmp/art/cus64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer.exe \;
+          find /tmp/art/cus86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer-x86.exe \;
           ls -la /tmp/apps
           git config user.name  "samdesk-ci"
           git config user.email "ci@samdesk.local"
@@ -40,7 +44,7 @@ jobs:
           git rm -rf . >/dev/null 2>&1 || true
           rm -rf apps && mkdir -p apps
           cp /tmp/apps/*.exe apps/
-          printf 'support binaries republished from run %s\n' "${{ inputs.run_id }}" > apps/README.txt
+          printf 'binaries republished from run %s\n' "${{ inputs.run_id }}" > apps/README.txt
           git add -f apps
-          git commit -m "dist: support exes from run ${{ inputs.run_id }}"
+          git commit -m "dist: support + customer exes from run ${{ inputs.run_id }}"
           git push -f origin dist

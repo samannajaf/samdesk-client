@@ -24,19 +24,15 @@ jobs:
         run: |
           set -eux
           mkdir -p /tmp/art
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support      -D /tmp/art/sup64
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86  -D /tmp/art/sup86
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer     -D /tmp/art/cus64
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer-x86 -D /tmp/art/cus86
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support  -D /tmp/art/sup64
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer -D /tmp/art/cus64
           find /tmp/art -type f -printf '%s\t%p\n'
       - name: Push binaries into the dist branch
         run: |
           set -eux
           mkdir -p /tmp/apps
           find /tmp/art/sup64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
-          find /tmp/art/sup86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \;
           find /tmp/art/cus64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer.exe \;
-          find /tmp/art/cus86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer-x86.exe \;
           ls -la /tmp/apps
           git config user.name  "samdesk-ci"
           git config user.email "ci@samdesk.local"

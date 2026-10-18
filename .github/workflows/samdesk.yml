@@ -196,6 +196,28 @@ jobs:
           mv ./target/release/rustdesk-portable-packer.exe "./Output/${{ matrix.out_name }}.exe"
           sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-${{ matrix.role }}-x64.txt
 
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+        with:
+          msbuild-architecture: x86
+
+      - name: Build MSI installer (SamDesk-branded)
+        shell: pwsh
+        run: |
+          # The MSI product/exe is named "SamDesk" (not rustdesk), so the installed
+          # product, Program Files folder and shortcut all read SamDesk. The portable
+          # packer above already embedded the folder, so renaming here only affects the MSI.
+          Move-Item -Force ./rustdesk/rustdesk.exe ./rustdesk/SamDesk.exe
+          pushd ./res/msi
+          python preprocess.py --arp -d ../../rustdesk --app-name SamDesk
+          nuget restore msi.sln
+          msbuild msi.sln -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+          popd
+          $msi = Get-ChildItem ./res/msi/Package/bin/*/Release/en-us/Package.msi | Select-Object -First 1
+          if (-not $msi) { Write-Error "MSI not produced"; exit 1 }
+          Move-Item -Force $msi.FullName "./Output/${{ matrix.out_name }}.msi"
+          Get-ChildItem ./Output | Format-Table Name,Length
+
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

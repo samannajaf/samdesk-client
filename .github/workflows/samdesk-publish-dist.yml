@@ -32,14 +32,16 @@ jobs:
           set -eux
           mkdir -p /tmp/apps
           find /tmp/art/sup64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
+          find /tmp/art/sup64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Support.msi \;
           find /tmp/art/cus64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer.exe \;
+          find /tmp/art/cus64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Customer.msi \;
           ls -la /tmp/apps
           git config user.name  "samdesk-ci"
           git config user.email "ci@samdesk.local"
           git checkout --orphan dist
           git rm -rf . >/dev/null 2>&1 || true
           rm -rf apps && mkdir -p apps
-          cp /tmp/apps/*.exe apps/
+          cp /tmp/apps/*.exe /tmp/apps/*.msi apps/ 2>/dev/null || cp /tmp/apps/* apps/
           printf 'binaries republished from run %s\n' "${{ inputs.run_id }}" > apps/README.txt
           git add -f apps
           git commit -m "dist: support + customer exes from run ${{ inputs.run_id }}"

@@ -224,6 +224,119 @@ jobs:
           name: ${{ matrix.out_name }}
           path: Output
 
+  # 32-bit Windows (i686) for both roles via the legacy Sciter UI. Flutter has no
+  # 32-bit Windows target, so this is the fallback for Windows 7 / older 32-bit
+  # systems. Adapted from upstream build-for-windows-sciter, with the SamDesk brand
+  # (res/samdesk_brand.py) and the role lock (samdesk_${role} feature) applied; the
+  # lock lives in shared code (src/server/connection.rs, src/client.rs, …) so it is
+  # enforced the same as in the Flutter build. No Flutter engine/bridge is involved.
+  build-sciter:
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'windows') }}
+    name: ${{ matrix.role }} x86 sciter
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        role: [customer, support]
+        include:
+          - role: customer
+            out_name: SamDesk.Customer-x86
+          - role: support
+            out_name: SamDesk.Support-x86
+    steps:
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+
+      - name: Install LLVM and Clang (32-bit)
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # commit 2026-05-26
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Rust toolchain (nightly i686, for Sciter abi_thiscall)
+        shell: bash
+        run: |
+          rustup toolchain install nightly-2023-10-13-i686-pc-windows-msvc \
+            --target i686-pc-windows-msvc --component rustfmt \
+            --profile minimal --no-self-update --force-non-host
+          rustup default nightly-2023-10-13-i686-pc-windows-msvc --force-non-host
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: samdesk-sciter-win-x86-${{ matrix.role }}
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies (x86-windows-static)
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x86-windows-static
+        shell: bash
+        run: |
+          if ! $VCPKG_ROOT/vcpkg install --triplet x86-windows-static --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r f; do echo "== $f"; tail -n 50 "$f"; done
+            exit 1
+          fi
+
+      - name: Build SamDesk (Sciter, i686) with the role lock
+        shell: bash
+        run: |
+          python3 res/samdesk_brand.py
+          python3 res/inline-sciter.py
+          sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
+          cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
+          set -o pipefail
+          if ! cargo build --locked --features inline,vram,hwcodec,samdesk_${{ matrix.role }} --release --bins 2>&1 | tee build.log; then
+            block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
+            enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::${enc}"
+            exit 1
+          fi
+          mkdir -p ./Release
+          mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
+          curl -LJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
+          curl -LJ -o ./usbmmidd_v2.zip https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
+          unzip usbmmidd_v2.zip
+          rm -rf ./usbmmidd_v2/deviceinstaller.exe ./usbmmidd_v2/usbmmidd.bat
+          mv ./usbmmidd_v2 ./Release || true
+
+      - name: find Runner.res
+        continue-on-error: true
+        shell: bash
+        run: |
+          runner_res=$(find . -name "Runner.res");
+          if [ -n "$runner_res" ]; then cp "$runner_res" ./libs/portable/Runner.res; fi
+
+      - name: Build self-extracting executable
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe
+          popd
+          mkdir -p ./Output
+          mv ./target/release/rustdesk-portable-packer.exe "./Output/${{ matrix.out_name }}.exe"
+          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-${{ matrix.role }}-x86.txt
+
+      - name: Upload
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.out_name }}
+          path: Output
+
   # SamDesk support client for Android (outgoing only, enforced by the samdesk
   # conn-type lock in src/samdesk). arm64-v8a only for now — the ABI that covers
   # the large majority of phones; armv7/x86_64 can be added once this is green.

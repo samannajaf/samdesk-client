@@ -26,6 +26,9 @@ jobs:
           mkdir -p /tmp/art
           gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support  -D /tmp/art/sup64
           gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer -D /tmp/art/cus64
+          # 32-bit (Sciter) builds are optional: older runs may not have them.
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86  -D /tmp/art/sup86 || echo "no x86 support artifact"
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer-x86 -D /tmp/art/cus86 || echo "no x86 customer artifact"
           find /tmp/art -type f -printf '%s\t%p\n'
       - name: Push binaries into the dist branch
         run: |
@@ -35,6 +38,8 @@ jobs:
           find /tmp/art/sup64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Support.msi \;
           find /tmp/art/cus64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer.exe \;
           find /tmp/art/cus64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Customer.msi \;
+          [ -d /tmp/art/sup86 ] && find /tmp/art/sup86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \; || true
+          [ -d /tmp/art/cus86 ] && find /tmp/art/cus86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer-x86.exe \; || true
           ls -la /tmp/apps
           git config user.name  "samdesk-ci"
           git config user.email "ci@samdesk.local"

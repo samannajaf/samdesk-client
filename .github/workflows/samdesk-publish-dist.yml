@@ -24,30 +24,27 @@ jobs:
         run: |
           set -eux
           mkdir -p /tmp/art
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support  -D /tmp/art/sup64
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer -D /tmp/art/cus64
-          # 32-bit (Sciter) builds are optional: older runs may not have them.
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Support-x86  -D /tmp/art/sup86 || echo "no x86 support artifact"
-          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk.Customer-x86 -D /tmp/art/cus86 || echo "no x86 customer artifact"
+          # Unified single-app artifacts. x86 (Sciter) and android are optional.
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk         -D /tmp/art/win64
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk-x86      -D /tmp/art/win86    || echo "no x86 artifact"
+          gh run download "${{ inputs.run_id }}" -R "${{ github.repository }}" -n SamDesk-android  -D /tmp/art/android  || echo "no android artifact"
           find /tmp/art -type f -printf '%s\t%p\n'
       - name: Push binaries into the dist branch
         run: |
           set -eux
           mkdir -p /tmp/apps
-          find /tmp/art/sup64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support.exe \;
-          find /tmp/art/sup64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Support.msi \;
-          find /tmp/art/cus64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer.exe \;
-          find /tmp/art/cus64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.Customer.msi \;
-          [ -d /tmp/art/sup86 ] && find /tmp/art/sup86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Support-x86.exe \; || true
-          [ -d /tmp/art/cus86 ] && find /tmp/art/cus86 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.Customer-x86.exe \; || true
+          find /tmp/art/win64 -iname '*.exe' -exec cp {} /tmp/apps/SamDesk.exe \;
+          find /tmp/art/win64 -iname '*.msi' -exec cp {} /tmp/apps/SamDesk.msi \; || true
+          [ -d /tmp/art/win86 ]   && find /tmp/art/win86   -iname '*.exe' -exec cp {} /tmp/apps/SamDesk-x86.exe \; || true
+          [ -d /tmp/art/android ] && find /tmp/art/android -iname '*.apk' -exec cp {} /tmp/apps/SamDesk.apk \; || true
           ls -la /tmp/apps
           git config user.name  "samdesk-ci"
           git config user.email "ci@samdesk.local"
           git checkout --orphan dist
           git rm -rf . >/dev/null 2>&1 || true
           rm -rf apps && mkdir -p apps
-          cp /tmp/apps/*.exe /tmp/apps/*.msi apps/ 2>/dev/null || cp /tmp/apps/* apps/
+          cp /tmp/apps/* apps/
           printf 'binaries republished from run %s\n' "${{ inputs.run_id }}" > apps/README.txt
           git add -f apps
-          git commit -m "dist: support + customer exes from run ${{ inputs.run_id }}"
+          git commit -m "dist: unified SamDesk binaries from run ${{ inputs.run_id }}"
           git push -f origin dist

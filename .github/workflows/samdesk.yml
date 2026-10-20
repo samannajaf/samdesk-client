@@ -52,21 +52,18 @@ jobs:
     uses: ./.github/workflows/bridge.yml
 
   build:
-    # Full-featured Flutter Windows build (x64) for both roles. Rebuilt only on an
-    # explicit windows/all dispatch so ordinary pushes don't burn Windows CI minutes.
+    # Unified full Flutter Windows build (x64): one SamDesk app with every RustDesk
+    # feature and NO role lock (bidirectional, like upstream RustDesk). Rebuilt only
+    # on an explicit windows/all dispatch so ordinary pushes don't burn Windows CI.
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'windows') }}
     needs: [samdesk-bridge]
-    name: ${{ matrix.role }} x64 flutter
+    name: SamDesk x64 flutter
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        role: [customer, support]
         include:
-          - role: customer
-            out_name: SamDesk.Customer
-          - role: support
-            out_name: SamDesk.Support
+          - out_name: SamDesk
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -123,7 +120,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          prefix-key: samdesk-flutter-win-x64-${{ matrix.role }}
+          prefix-key: samdesk-flutter-win-x64-unified
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -142,15 +139,15 @@ jobs:
             exit 1
           fi
 
-      - name: Build librustdesk with the SamDesk role lock
+      - name: Build librustdesk (unified SamDesk, no role lock)
         shell: bash
         run: |
           python3 res/samdesk_brand.py
           set -o pipefail
-          # The role feature (samdesk_customer / samdesk_support) is baked into the Flutter
-          # cdylib here; build.py then runs `flutter build windows` against it via --skip-cargo,
-          # so the upstream packaging path stays untouched.
-          if ! cargo build --locked --release --lib --features flutter,hwcodec,vram,samdesk_${{ matrix.role }} 2>&1 | tee build.log; then
+          # No samdesk_* feature: the role lock is compiled out, giving the full
+          # bidirectional RustDesk behaviour with SamDesk branding. build.py then runs
+          # `flutter build windows` via --skip-cargo, so upstream packaging is untouched.
+          if ! cargo build --locked --release --lib --features flutter,hwcodec,vram 2>&1 | tee build.log; then
             block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
             enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error::${enc}"
@@ -194,7 +191,7 @@ jobs:
           popd
           mkdir -p ./Output
           mv ./target/release/rustdesk-portable-packer.exe "./Output/${{ matrix.out_name }}.exe"
-          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-${{ matrix.role }}-x64.txt
+          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-x64.txt
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
@@ -232,17 +229,13 @@ jobs:
   # enforced the same as in the Flutter build. No Flutter engine/bridge is involved.
   build-sciter:
     if: ${{ github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'windows') }}
-    name: ${{ matrix.role }} x86 sciter
+    name: SamDesk x86 sciter
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        role: [customer, support]
         include:
-          - role: customer
-            out_name: SamDesk.Customer-x86
-          - role: support
-            out_name: SamDesk.Support-x86
+          - out_name: SamDesk-x86
     steps:
       - name: Export GitHub Actions cache environment variables
         uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
@@ -271,7 +264,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          prefix-key: samdesk-sciter-win-x86-${{ matrix.role }}
+          prefix-key: samdesk-sciter-win-x86-unified
 
       - name: Setup vcpkg with Github Actions binary cache
         uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
@@ -290,7 +283,7 @@ jobs:
             exit 1
           fi
 
-      - name: Build SamDesk (Sciter, i686) with the role lock
+      - name: Build SamDesk (Sciter, i686, unified, no role lock)
         shell: bash
         run: |
           python3 res/samdesk_brand.py
@@ -298,7 +291,7 @@ jobs:
           sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
           cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
           set -o pipefail
-          if ! cargo build --locked --features inline,vram,hwcodec,samdesk_${{ matrix.role }} --release --bins 2>&1 | tee build.log; then
+          if ! cargo build --locked --features inline,vram,hwcodec --release --bins 2>&1 | tee build.log; then
             block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
             enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error::${enc}"
@@ -329,7 +322,7 @@ jobs:
           popd
           mkdir -p ./Output
           mv ./target/release/rustdesk-portable-packer.exe "./Output/${{ matrix.out_name }}.exe"
-          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-${{ matrix.role }}-x86.txt
+          sha256sum ./Output/*.exe | tee ./Output/SHA256SUMS-x86.txt
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -342,8 +335,8 @@ jobs:
   # the large majority of phones; armv7/x86_64 can be added once this is green.
   android-support:
     needs: [samdesk-bridge]
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'android')) }}
-    name: android support arm64
+    if: ${{ github.event_name == 'workflow_dispatch' && (inputs.scope == 'all' || inputs.scope == 'android') }}
+    name: android unified universal
     runs-on: ubuntu-24.04
     steps:
       - name: Free disk space
@@ -404,19 +397,21 @@ jobs:
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
 
-      - name: Install vcpkg dependencies (arm64-v8a)
+      - name: Install vcpkg dependencies (all Android ABIs)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         shell: bash
         run: |
           chmod +x ./flutter/*.sh || true
-          if ! bash ./flutter/build_android_deps.sh arm64-v8a 2>&1 | tee vcpkgdeps.log; then
-            tail=$( { find "${VCPKG_ROOT}/" -name "*.log" -exec tail -n 60 {} \; 2>/dev/null; tail -n 60 vcpkgdeps.log; } | tail -c 3000)
-            enc=$(printf '%s' "$tail" | sed ':a;N;$!ba;s/\n/%0A/g')
-            echo "::error::${enc}"
-            exit 1
-          fi
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            if ! bash ./flutter/build_android_deps.sh "$abi" 2>&1 | tee -a vcpkgdeps.log; then
+              tail=$( { find "${VCPKG_ROOT}/" -name "*.log" -exec tail -n 40 {} \; 2>/dev/null; tail -n 60 vcpkgdeps.log; } | tail -c 3000)
+              enc=$(printf '%s' "$tail" | sed ':a;N;$!ba;s/\n/%0A/g')
+              echo "::error::deps $abi failed%0A${enc}"
+              exit 1
+            fi
+          done
 
       - name: Restore bridge files
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -432,27 +427,36 @@ jobs:
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
-          prefix-key: samdesk-android-arm64
+          prefix-key: samdesk-android-universal
 
-      - name: Build rustdesk lib (samdesk_support)
+      - name: Build rustdesk lib (unified, all ABIs)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         shell: bash
         run: |
           python3 res/samdesk_brand.py
-          rustup target add aarch64-linux-android
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
           cargo install cargo-ndk --version ${{ env.CARGO_NDK_VERSION }} --locked
           set -o pipefail
-          if ! cargo ndk --platform 21 --target aarch64-linux-android build --locked --release \
-               --features flutter,hwcodec,samdesk_support 2>&1 | tee build.log; then
+          # No samdesk_* feature: full bidirectional RustDesk with SamDesk branding.
+          if ! cargo ndk --platform 21 \
+               --target aarch64-linux-android --target armv7-linux-androideabi --target x86_64-linux-android \
+               build --locked --release --features flutter,hwcodec 2>&1 | tee build.log; then
             block=$(awk 'tolower($0) ~ /^error/{f=1} f{print}' build.log | head -c 3000)
             enc=$(printf '%s' "$block" | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error::${enc}"
             exit 1
           fi
-          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
-          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          # Place each ABI's lib + libc++_shared into jniLibs (abi:rust-triple:sysroot-dir)
+          for m in arm64-v8a:aarch64-linux-android:aarch64-linux-android \
+                   armeabi-v7a:armv7-linux-androideabi:arm-linux-androideabi \
+                   x86_64:x86_64-linux-android:x86_64-linux-android; do
+            abi=${m%%:*}; rest=${m#*:}; triple=${rest%%:*}; sys=${rest#*:}
+            mkdir -p ./flutter/android/app/src/main/jniLibs/$abi
+            cp ./target/$triple/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/$abi/librustdesk.so
+            cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$sys/libc++_shared.so ./flutter/android/app/src/main/jniLibs/$abi/
+          done
 
       - name: Prepare signing
         env:
@@ -476,7 +480,7 @@ jobs:
             echo "SAMDESK_SIGNING=debug" >> "$GITHUB_ENV"
           fi
 
-      - name: Build APK
+      - name: Build APK (universal)
         shell: bash
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
@@ -484,19 +488,17 @@ jobs:
         run: |
           export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
-          mkdir -p ./flutter/android/app/src/main/jniLibs/arm64-v8a
-          cp ${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/
-          cp ./target/aarch64-linux-android/release/liblibrustdesk.so ./flutter/android/app/src/main/jniLibs/arm64-v8a/librustdesk.so
+          # jniLibs for all ABIs were populated in the lib build step; build one universal APK.
           pushd flutter
-          flutter build apk --release --target-platform android-arm64 --split-per-abi
+          flutter build apk --release
           popd
           mkdir -p ./Output
-          cp ./flutter/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "./Output/SamDesk.Support-android-arm64.apk"
-          ( cd ./Output && sha256sum *.apk | tee SHA256SUMS-android-arm64.txt )
+          cp ./flutter/build/app/outputs/flutter-apk/app-release.apk "./Output/SamDesk.apk"
+          ( cd ./Output && sha256sum *.apk | tee SHA256SUMS-android.txt )
           echo "APK signed with: $SAMDESK_SIGNING"
 
       - name: Upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: SamDesk.Support-android-arm64
+          name: SamDesk-android
           path: Output

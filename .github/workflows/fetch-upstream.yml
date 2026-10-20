@@ -1,0 +1,45 @@
+name: Fetch upstream RustDesk
+
+# Downloads the OFFICIAL, SIGNED RustDesk release binaries on a GitHub runner
+# (which has open internet) and pushes them to the `upstream` branch, so they
+# can be fetched by a plain git clone. We only rename these later to embed the
+# self-host server+key (the file content/signature stays untouched).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download latest official RustDesk binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          echo "== latest release assets =="
+          gh release view --repo rustdesk/rustdesk --json tagName,assets \
+            --jq '.tagName, (.assets[].name)'
+          mkdir -p /tmp/up
+          cd /tmp/up
+          gh release download --repo rustdesk/rustdesk \
+            --pattern '*-x86_64.exe' \
+            --pattern '*-x86-sciter.exe' \
+            --pattern '*-aarch64.apk'
+          ls -la
+      - name: Push to upstream branch
+        run: |
+          set -eux
+          git config user.name  Claude
+          git config user.email noreply@anthropic.com
+          git checkout --orphan upstream
+          git rm -rf . >/dev/null 2>&1 || true
+          rm -rf upstream-bin && mkdir -p upstream-bin
+          cp /tmp/up/* upstream-bin/
+          ( cd upstream-bin && sha256sum * | tee SHA256SUMS.txt )
+          git add -f upstream-bin
+          git commit -m "upstream: official RustDesk binaries"
+          git push -f origin upstream
